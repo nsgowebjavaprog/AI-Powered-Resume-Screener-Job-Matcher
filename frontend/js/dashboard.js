@@ -2,8 +2,9 @@
    dashboard.js
    ------------
    Powers dashboard.html: fetches jobs/resumes from the Django API, lets a
-   recruiter post a job (CREATE), lets a candidate add a resume (CREATE) and
-   trigger the AI match (custom endpoint), and renders results (READ).
+   recruiter post a job (CREATE), lets a candidate upload a resume file
+   (CREATE) and trigger the AI match (custom endpoint), and renders results
+   (READ).
    ========================================================================== */
 
 // --- Guard: bounce anyone without a valid token back to login ---------------
@@ -78,7 +79,7 @@ if (jobForm) {
 }
 
 // ----------------------------------------------------------------------------
-// RESUMES: list (READ) + create (CREATE, candidate only)
+// RESUMES: list (READ) + create (CREATE, candidate only) via file upload
 // ----------------------------------------------------------------------------
 let myResumes = [];
 
@@ -99,17 +100,34 @@ const resumeForm = document.getElementById("resume-form");
 if (resumeForm) {
   resumeForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const payload = {
-      title: resumeForm.title.value,
-      raw_text: resumeForm.raw_text.value,
-    };
+
+    // Basic client-side guard so we don't send an empty file field
+    const selectedFile = resumeForm.file.files[0];
+    if (!selectedFile) {
+      alert("Please choose a PDF or DOCX file first.");
+      return;
+    }
+
+    // FormData (not JSON) is required to upload a real file -> the browser
+    // sets the correct multipart/form-data Content-Type + boundary itself.
+    const formData = new FormData();
+    formData.append("title", resumeForm.title.value);
+    formData.append("file", selectedFile);
+
+    const submitBtn = resumeForm.querySelector("button[type=submit]");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Uploading & extracting text...";
+
     try {
-      await apiRequest("/resumes/", { method: "POST", body: payload }); // CREATE
+      await apiRequestForm("/resumes/", formData); // CREATE via multipart
       resumeForm.reset();
       loadResumes();
-      alert("Resume saved! Pick a job below and click 'Check my match'.");
+      alert("Resume uploaded! Text was extracted automatically. Pick a job below and click 'Check my match'.");
     } catch (err) {
       alert("Could not save resume: " + err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Save resume";
     }
   });
 }

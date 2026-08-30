@@ -29,6 +29,12 @@ class JobPostingSerializer(serializers.ModelSerializer):
 
 
 class ResumeSerializer(serializers.ModelSerializer):
+    """
+    Handles resumes uploaded as a PDF/DOCX file. `raw_text` is extracted
+    server-side (see jobs/utils.py + jobs/views.py perform_create) and is
+    NEVER accepted directly from the client -> it's read_only here.
+    `file` is required on create so every resume has a source document.
+    """
     candidate_username = serializers.ReadOnlyField(source="candidate.username")
 
     class Meta:
@@ -37,13 +43,23 @@ class ResumeSerializer(serializers.ModelSerializer):
             "id", "title", "file", "raw_text", "candidate",
             "candidate_username", "created_at",
         ]
-        read_only_fields = ["candidate", "created_at"]
+        # raw_text is set automatically by the view from the uploaded file,
+        # never sent by the client directly -> read-only.
+        read_only_fields = ["candidate", "raw_text", "created_at"]
+        extra_kwargs = {
+            "file": {"required": True},
+        }
 
-    def validate_raw_text(self, value):
-        if len(value.strip()) < 30:
-            raise serializers.ValidationError(
-                "Resume text looks too short — paste the full resume content."
-            )
+    def validate_file(self, value):
+        # Restrict uploads to PDF/DOCX only, and cap the size (5 MB) so a
+        # huge file can't be used to overload the text-extraction step.
+        allowed_extensions = (".pdf", ".docx")
+        filename = value.name.lower()
+        if not filename.endswith(allowed_extensions):
+            raise serializers.ValidationError("Only .pdf or .docx files are allowed.")
+        max_size_mb = 5
+        if value.size > max_size_mb * 1024 * 1024:
+            raise serializers.ValidationError(f"File too large — max {max_size_mb}MB.")
         return value
 
 

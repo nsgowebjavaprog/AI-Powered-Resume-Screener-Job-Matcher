@@ -18,13 +18,15 @@ in action: a handful of lines gives us 5 REST endpoints per model:
 """
 import requests
 from django.conf import settings
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, serializers
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 
 from .models import JobPosting, Resume, MatchResult
 from .serializers import JobPostingSerializer, ResumeSerializer, MatchResultSerializer
 from .permissions import IsRecruiter, IsOwnerOrReadOnly
+from .utils import extract_text_from_file
 
 
 class JobPostingViewSet(viewsets.ModelViewSet):
@@ -46,9 +48,17 @@ class JobPostingViewSet(viewsets.ModelViewSet):
 
 
 class ResumeViewSet(viewsets.ModelViewSet):
-    """Full CRUD for resumes. A candidate can only see/edit THEIR OWN resumes."""
+    """
+    Full CRUD for resumes. A candidate can only see/edit THEIR OWN resumes.
+    Resumes are now created by UPLOADING a PDF/DOCX file (not pasting text)
+    -> the text is extracted here on the server and saved automatically.
+    """
     serializer_class = ResumeSerializer
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
+    # MultiPartParser/FormParser let this endpoint accept file uploads
+    # (multipart/form-data). JSONParser is kept so other actions (like the
+    # `match` action below, which sends no body) still work over JSON.
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         # Row-level security: filter the queryset itself so a user can never
@@ -56,7 +66,29 @@ class ResumeViewSet(viewsets.ModelViewSet):
         return Resume.objects.filter(candidate=self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(candidate=self.request.user)
+        """
+        Called after the serializer's own validation (validate_file, etc.)
+        has already passed. Here we:
+          1. pull the uploaded file out of the request
+          2. extract its text (PDF -> pdfplumber, DOCX -> python-docx)
+          3. save the Resume row with candidate + the extracted raw_text
+        """
+        uploaded_file = self.request.FILES.get("file")
+        extracted_text = ""
+
+        if uploaded_file:
+            try:
+                extracted_text = extract_text_from_file(uploaded_file)
+            except ValueError as e:
+                # e.g. unsupported extension -> surface as a clean 400, not a 500
+                raise serializers.ValidationError({"file": str(e)})
+
+            if not extracted_text.strip():
+                raise serializers.ValidationError(
+                    {"file": "Couldn't extract any text from this file — it may be a scanned/image-only document."}
+                )
+
+        serializer.save(candidate=self.request.user, raw_text=extracted_text)
 
     @action(detail=True, methods=["post"], url_path="match/(?P<job_id>[^/.]+)")
     def match(self, request, pk=None, job_id=None):
