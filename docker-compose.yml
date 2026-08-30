@@ -1,0 +1,65 @@
+# docker-compose.yml
+# -------------------
+# Spins up ALL 4 pieces of the project with one command: `docker compose up --build`
+#   db        -> PostgreSQL database
+#   django    -> auth + CRUD REST API (port 8000)
+#   fastapi   -> AI matching microservice (port 8001)
+#   frontend  -> static HTML/CSS/JS site served by nginx (port 5500)
+# Services talk to each other using their SERVICE NAME as the hostname
+# (e.g. Django's DB host = "db", not "localhost") because Docker gives
+# each container its own network namespace, all joined on one virtual network.
+
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-resume_screener}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"          # exposed so you can inspect the DB with a GUI tool if needed
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # persists data across container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build: ./backend-fastapi
+    restart: always
+    ports:
+      - "8001:8001"
+    # no DB needed for this stateless AI service
+
+  django:
+    build: ./backend-django
+    restart: always
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db                       # <- service name resolves via Docker's internal DNS
+      FASTAPI_MATCH_SERVICE_URL: http://fastapi:8001
+    depends_on:
+      db:
+        condition: service_healthy
+      fastapi:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend-django:/app                 # live code reload during development
+
+  frontend:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "5500:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro   # serve the static site read-only
+
+volumes:
+  pgdata:
