@@ -2,7 +2,6 @@
 
 #### Working of application as following:
 
-
 ![alt text](<Screenshot 2026-08-30 125637.png>) 
 
 
